@@ -259,7 +259,7 @@ def auc_real_vs_synth(df_real: pd.DataFrame, df_synth: pd.DataFrame):
 # ------------------------------
 
 st.set_page_config(page_title="Simulated Responses Builder (Excel)", layout="wide")
-st.title("🧪 Simulated Responses Builder (Excel)")
+st.title("🧪 Simulated Responses Builder")
 
 with st.sidebar:
     st.header("1) Load data")
