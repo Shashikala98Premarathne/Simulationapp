@@ -408,4 +408,7 @@ with simulate_tab:
                     "Download Excel",
                     data=f,
                     file_name="synthetic_data.xlsx",
-                    mime="application/vnd.open
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+        else:
+            st.caption("Download file generation skipped for speed. Toggle")
