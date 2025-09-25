@@ -15,18 +15,6 @@ Validation features:
 - Metrics: Mean Absolute Error (MAE) on numeric and binary columns, Kolmogorov–Smirnov (KS) on continuous columns,
   Population Stability Index (PSI) for categorical columns, and a Real-vs-Synthetic classifier AUC (target ≈ 0.5).
 - Clear pass/fail indicators and a results table.
-
-How to run locally:
--------------------
-1) Save as `app.py`
-2) Install dependencies:
-   ```bash
-   pip install streamlit pandas numpy scipy scikit-learn openpyxl
-   ```
-3) Run:
-   ```bash
-   streamlit run app.py
-   ```
 """
 
 import json
@@ -258,7 +246,7 @@ def auc_real_vs_synth(df_real: pd.DataFrame, df_synth: pd.DataFrame):
 # Streamlit UI
 # ------------------------------
 
-st.set_page_config(page_title="Simulated Responses Builder (Excel)", layout="wide")
+st.set_page_config(page_title="Simulated Responses Builder", layout="wide")
 st.title("🧪 Simulated Responses Builder")
 
 with st.sidebar:
@@ -304,6 +292,8 @@ with st.sidebar:
         st.header("4) Output")
         include_original_flag = st.checkbox("Add a column `__source__` indicating real vs synthetic", value=True)
         do_preview = st.checkbox("Show preview tables", value=True)
+        run_diagnostics = st.checkbox("Run diagnostics (stats tables)", value=True)
+        create_download_file = st.checkbox("Create Excel download after run", value=True)
 
     else:
         df = None
@@ -320,6 +310,7 @@ simulate_tab, validate_tab = st.tabs(["Simulate", "Validation"])
 
 discrete_set = set(bin_cols) | set(ord_cols)
 
+# ---------------- Simulation Tab ----------------
 with simulate_tab:
     st.subheader("Generate synthetic data")
     df_sub = subset_dataframe(df, filters)
@@ -359,42 +350,43 @@ with simulate_tab:
         st.success(f"Done! Generated {len(synth)} synthetic rows.")
         st.info(f"Effective seed used: {seed_used}")
 
-        with st.expander("Diagnostics: compare subset vs. synthetic"):
-            num_cols = df_sub.select_dtypes(include=[np.number]).columns
-            cat_cols = [c for c in df_sub.columns if c not in num_cols]
+        if run_diagnostics:
+            with st.expander("Diagnostics: compare subset vs. synthetic"):
+                num_cols = df_sub.select_dtypes(include=[np.number]).columns
+                cat_cols = [c for c in df_sub.columns if c not in num_cols]
 
-            st.markdown("**Numeric summary (mean and standard deviation)**")
-            rows = []
-            for col in num_cols:
-                rows.append({
-                    "column": col,
-                    "real_mean": _safe_mean(df_sub[col]),
-                    "real_sd": _safe_std(df_sub[col]),
-                    "synth_mean": _safe_mean(synth[col]),
-                    "synth_sd": _safe_std(synth[col]),
-                })
-            if len(rows) > 0:
-                st.dataframe(pd.DataFrame(rows))
+                st.markdown("**Numeric summary (mean and standard deviation)**")
+                rows = []
+                for col in num_cols:
+                    rows.append({
+                        "column": col,
+                        "real_mean": _safe_mean(df_sub[col]),
+                        "real_sd": _safe_std(df_sub[col]),
+                        "synth_mean": _safe_mean(synth[col]),
+                        "synth_sd": _safe_std(synth[col]),
+                    })
+                if len(rows) > 0:
+                    st.dataframe(pd.DataFrame(rows))
 
-            st.markdown("**KS test (continuous numeric only)**")
-            rows = []
-            cont_cols = [c for c in num_cols if c not in discrete_set]
-            for col in cont_cols:
-                rows.append({"column": col, "KS_stat": ks_numeric(df_sub[col], synth[col])})
-            if len(rows) > 0:
-                st.dataframe(pd.DataFrame(rows))
+                st.markdown("**KS test (continuous numeric only)**")
+                rows = []
+                cont_cols = [c for c in num_cols if c not in discrete_set]
+                for col in cont_cols:
+                    rows.append({"column": col, "KS_stat": ks_numeric(df_sub[col], synth[col])})
+                if len(rows) > 0:
+                    st.dataframe(pd.DataFrame(rows))
 
-            st.markdown("**Discrete columns — value share deltas (percentage points)**")
-            for col in [c for c in num_cols if c in discrete_set]:
-                st.markdown(f"*{col}*")
-                st.dataframe(describe_cats(df_sub[col], synth[col]))
+                st.markdown("**Discrete columns — value share deltas (percentage points)**")
+                for col in [c for c in num_cols if c in discrete_set]:
+                    st.markdown(f"*{col}*")
+                    st.dataframe(describe_cats(df_sub[col], synth[col]))
 
-            st.markdown("**Categorical columns — value share deltas (percentage points)**")
-            for col in cat_cols:
-                st.markdown(f"*{col}*")
-                st.dataframe(describe_cats(df_sub[col], synth[col]))
+                st.markdown("**Categorical columns — value share deltas (percentage points)**")
+                for col in cat_cols:
+                    st.markdown(f"*{col}*")
+                    st.dataframe(describe_cats(df_sub[col], synth[col]))
 
-        # Download as Excel with metadata (two sheets)
+        # Download as Excel with metadata
         out_path = "synthetic_data.xlsx"
         meta = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -407,127 +399,13 @@ with simulate_tab:
             "binary_columns": json.dumps(list(map(str, bin_cols))),
             "ordinal_columns": json.dumps(list(map(str, ord_cols)))
         }
-        with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
-            combined.to_excel(xw, index=False, sheet_name="data")
-            pd.DataFrame([meta]).to_excel(xw, index=False, sheet_name="meta")
-        with open(out_path, "rb") as f:
-            st.download_button(
-                "Download Excel",
-                data=f,
-                file_name="synthetic_data.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-
-with validate_tab:
-    st.subheader("Parallel testing (holdout validation)")
-    st.caption("Train on a fraction, boost by a factor, compare against a never-seen holdout.")
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        train_frac = st.slider("Training fraction", 0.1, 0.9, 0.3, 0.05)
-    with col2:
-        boost_factor = st.selectbox("Boost factor", [1, 2, 3, 4], index=2)
-    with col3:
-        runs = st.number_input("Validation repeats", min_value=1, max_value=10, value=1)
-
-    if st.button("Run validation", type="primary"):
-        with st.spinner("Running validation..."):
-            results = []
-            for rep in range(int(runs)):
-                seed_used = int(secrets.randbits(64)) if randomize_seed else int(seed) + rep
-                df_train, df_holdout = train_test_split(df, train_size=train_frac, random_state=seed_used, shuffle=True)
-
-                # Apply current filters to define target segment on train and holdout
-                train_seg = subset_dataframe(df_train, filters)
-                hold_seg = subset_dataframe(df_holdout, filters)
-
-                if len(train_seg) == 0 or len(hold_seg) == 0:
-                    st.warning("Filtered subset is empty in train or holdout. Adjust filters or training fraction.")
-                    continue
-
-                # Generate boost on training subset
-                n_gen = int(len(train_seg) * (boost_factor - 1)) if boost_factor > 1 else 0
-                discrete_set_val = set(bin_cols) | set(ord_cols)
-                if "Bootstrap" in method:
-                    synth = bootstrap_jitter_sample(
-                        train_seg, n_rows=max(n_gen, 0), noise_pct=float(noise_pct), seed=seed_used,
-                        discrete_cols=discrete_set_val
-                    ) if n_gen > 0 else train_seg.iloc[0:0].copy()
-                else:
-                    synth = parametric_mvn_sample(
-                        train_seg, n_rows=max(n_gen, 0), seed=seed_used, discrete_cols=discrete_set_val
-                    ) if n_gen > 0 else train_seg.iloc[0:0].copy()
-                synth = enforce_discrete_constraints(synth, bin_cols, ord_cols, allowed_vals)
-
-                # Combine real train + synthetic boost to match boosted size
-                boosted = pd.concat([train_seg, synth], ignore_index=True)
-
-                # Compute metrics against holdout segment
-                num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-                cont_cols = [c for c in num_cols if c not in discrete_set_val]
-                disc_cols = [c for c in num_cols if c in discrete_set_val]
-                cat_cols = [c for c in df.columns if c not in num_cols]
-
-                # MAE on numeric and binary (treat 0/1 as numeric here)
-                mae_vals = []
-                for col in num_cols:
-                    mae_vals.append(mae_numeric(hold_seg[col], boosted[col]))
-                mae_overall = float(np.nanmean(mae_vals)) if len(mae_vals) else np.nan
-
-                # KS on continuous only
-                ks_vals = []
-                for col in cont_cols:
-                    ks_vals.append(ks_numeric(hold_seg[col], boosted[col]))
-                ks_overall = float(np.nanmean(ks_vals)) if len(ks_vals) else np.nan
-
-                # PSI on categoricals
-                psi_vals = []
-                for col in cat_cols:
-                    psi_vals.append(psi_categorical(hold_seg[col], boosted[col]))
-                psi_overall = float(np.nanmean(psi_vals)) if len(psi_vals) else np.nan
-
-                # Real-vs-Synthetic classifier AUC (lower is better, target ≈ 0.5)
-                try:
-                    auc = auc_real_vs_synth(train_seg, synth) if len(synth) > 0 else 0.5
-                except Exception:
-                    auc = np.nan
-
-                results.append({
-                    "rep": rep + 1,
-                    "train_rows": len(train_seg),
-                    "holdout_rows": len(hold_seg),
-                    "boost_factor": boost_factor,
-                    "generated_rows": n_gen,
-                    "MAE_numeric": mae_overall,
-                    "KS_cont": ks_overall,
-                    "PSI_categorical": psi_overall,
-                    "AUC_real_vs_synth": auc,
-                    "seed_used": seed_used,
-                })
-
-        if len(results):
-            res_df = pd.DataFrame(results)
-            st.markdown("### Validation results")
-            st.dataframe(res_df)
-
-            # Simple pass/fail badges
-            mae_thr = 0.1  # adjust to your business tolerance
-            ks_thr = 0.15
-            psi_thr = 0.2
-            auc_thr_low, auc_thr_high = 0.45, 0.55
-
-            last = res_df.iloc[-1]
-            pass_mae = (pd.isna(last.MAE_numeric) or last.MAE_numeric <= mae_thr)
-            pass_ks = (pd.isna(last.KS_cont) or last.KS_cont <= ks_thr)
-            pass_psi = (pd.isna(last.PSI_categorical) or last.PSI_categorical <= psi_thr)
-            pass_auc = (pd.isna(last.AUC_real_vs_synth) or (auc_thr_low <= last.AUC_real_vs_synth <= auc_thr_high))
-
-            st.markdown(
-                f"**Pass/Fail** — MAE: {'✅' if pass_mae else '❌'}  |  KS: {'✅' if pass_ks else '❌'}  |  PSI: {'✅' if pass_psi else '❌'}  |  AUC: {'✅' if pass_auc else '❌'}"
-            )
-        else:
-            st.warning("No results produced. Please check filters and try again.")
-
-# Footer tips
-st.markdown("---")
-st.markdown("**Tips**: Jitter applies to continuous columns only. Use the Advanced box to mark any extra 0/1 or Likert columns if detection misses them.")
+        if create_download_file:
+            with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
+                combined.to_excel(xw, index=False, sheet_name="data")
+                pd.DataFrame([meta]).to_excel(xw, index=False, sheet_name="meta")
+            with open(out_path, "rb") as f:
+                st.download_button(
+                    "Download Excel",
+                    data=f,
+                    file_name="synthetic_data.xlsx",
+                    mime="application/vnd.open
