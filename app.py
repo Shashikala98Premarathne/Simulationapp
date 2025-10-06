@@ -325,7 +325,29 @@ def auc_real_vs_synth(df_real: pd.DataFrame, df_synth: pd.DataFrame):
 # ------------------------------
 
 st.set_page_config(page_title="Simulated Responses Builder", layout="wide")
-st.title("Simulated Responses Builder")
+def set_background_solid(main="#7DD9E651", sidebar="#EEEFF3"):
+    st.markdown(f"""
+    <style>
+      [data-testid="stAppViewContainer"],
+      [data-testid="stAppViewContainer"] .main,
+      [data-testid="stAppViewContainer"] .block-container {{
+        background-color: {main} !important;
+      }}
+      [data-testid="stSidebar"],
+      [data-testid="stSidebar"] > div,
+      [data-testid="stSidebar"] .block-container {{
+        background-color: {sidebar} !important;
+      }}
+      header[data-testid="stHeader"] {{ background: transparent; }}
+      [data-testid="stDataFrame"],
+      [data-testid="stTable"] {{ background-color: transparent !important; }}
+    </style>
+    """, unsafe_allow_html=True)
+set_background_solid()
+
+st.title("📊 Simulated Responses Builder")
+st.caption("ℹ️ Tip: For small datasets (n < 500), use **Bootstrap + Jitter** for realistic results. For larger samples (n > 500), try **Parametric** or **CTGAN** for more variety. Check Method in the sidebar.")
+
 
 with st.sidebar:
     st.header("1) Load data")
