@@ -247,7 +247,7 @@ def auc_real_vs_synth(df_real: pd.DataFrame, df_synth: pd.DataFrame):
 # ------------------------------
 
 st.set_page_config(page_title="Simulated Responses Builder", layout="wide")
-st.title("🧪 Simulated Responses Builder")
+st.title("Simulated Responses Builder")
 
 with st.sidebar:
     st.header("1) Load data")
@@ -258,20 +258,28 @@ with st.sidebar:
 
     st.header("2) Subset filters")
     filters = {}
+    exclude_cols = []  # NEW
 
     if up is not None:
         df = pd.read_excel(up)
         numeric_cols, cat_cols = infer_column_types(df)
         bin_cols, ord_cols, allowed_vals = detect_discrete_numeric(df)
+
         st.caption(
             f"Detected {len(numeric_cols)} numeric ({len(bin_cols)} binary, {len(ord_cols)} ordinal) and {len(cat_cols)} categorical columns."
         )
+
         with st.expander("Advanced: mark additional discrete columns"):
             extra_binary = st.multiselect("Extra binary columns (0/1)", options=[c for c in numeric_cols if c not in bin_cols])
             extra_ordinal = st.multiselect("Extra ordinal/integer-coded columns", options=[c for c in numeric_cols if c not in ord_cols and c not in bin_cols])
             bin_cols = list(dict.fromkeys(list(bin_cols) + extra_binary))
             ord_cols = list(dict.fromkeys(list(ord_cols) + extra_ordinal))
 
+        # NEW: Exclusion filter
+        with st.expander("Exclude columns from simulation (keep blank)"):
+            exclude_cols = st.multiselect("Select columns to exclude", options=df.columns.tolist(), default=[])
+
+        # Subset filters
         for col in cat_cols:
             vals = df[col].dropna().unique().tolist()
             if len(vals) > 0:
@@ -297,7 +305,8 @@ with st.sidebar:
 
     else:
         df = None
-        bin_cols, ord_cols, allowed_vals = [], [], {}
+        bin_cols, ord_cols, allowed_vals, exclude_cols = [], [], {}, []
+        
 
 st.markdown("---")
 
@@ -339,7 +348,11 @@ with simulate_tab:
                     df_sub, n_rows=int(n_rows), seed=seed_used, discrete_cols=discrete_set
                 )
             synth = enforce_discrete_constraints(synth, bin_cols, ord_cols, allowed_vals)
-
+            # Clear excluded columns (keep them as blank)
+            for col in exclude_cols:
+                if col in synth.columns:
+                    synth[col] = None
+                    
             if include_original_flag:
                 df_tagged = df.copy(); df_tagged["__source__"] = "real"
                 synth_tagged = synth.copy(); synth_tagged["__source__"] = "synthetic"
