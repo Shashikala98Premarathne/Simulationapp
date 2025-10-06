@@ -28,6 +28,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder
+from sdv.tabular import CTGAN
 import streamlit as st
 
 # ------------------------------
@@ -130,6 +131,18 @@ def parametric_mvn_sample(df_sub: pd.DataFrame, n_rows: int, seed: int,
                 out[col] = mvn_draws[:, i]
 
     return out
+
+def ctgan_generate(df_sub: pd.DataFrame, n_rows: int, epochs: int = 100, seed: int = 42):
+    """Generate realistic synthetic data using CTGAN."""
+    try:
+        model = CTGAN(epochs=epochs, cuda=False)
+        model.fit(df_sub)
+        synth = model.sample(n_rows)
+        return synth
+    except Exception as e:
+        st.error(f"CTGAN generation failed: {e}")
+        return df_sub.sample(n=n_rows, replace=True, random_state=seed)
+
 
 
 def enforce_discrete_constraints(df_generated: pd.DataFrame, binary_cols, ordinal_cols, allowed_values):
@@ -290,7 +303,7 @@ with st.sidebar:
         st.header("3) Generation settings")
         method = st.selectbox(
             "Method",
-            ["Bootstrap + Jitter (recommended)", "Parametric (MVN numeric + categorical resampling)"]
+            ["Bootstrap + Jitter (recommended)", "Parametric (MVN numeric + categorical resampling)", "CTGAN (Deep Learning — realistic synthetic data)"]
         )
         n_rows = st.number_input("How many synthetic rows?", min_value=1, max_value=100000, value=100, step=10)
         noise_pct = 0.0
@@ -338,16 +351,30 @@ with simulate_tab:
         with st.spinner("Generating synthetic rows..."):
             seed_used = int(secrets.randbits(64)) if randomize_seed else int(seed)
 
-            if "Bootstrap" in method:
-                synth = bootstrap_jitter_sample(
-                    df_sub, n_rows=int(n_rows), noise_pct=float(noise_pct), seed=seed_used,
-                    discrete_cols=discrete_set
-                )
-            else:
-                synth = parametric_mvn_sample(
-                    df_sub, n_rows=int(n_rows), seed=seed_used, discrete_cols=discrete_set
-                )
-            synth = enforce_discrete_constraints(synth, bin_cols, ord_cols, allowed_vals)
+    if "Bootstrap" in method:
+        synth = bootstrap_jitter_sample(
+            df_sub,
+            n_rows=int(n_rows),
+            noise_pct=float(noise_pct),
+            seed=seed_used,
+            discrete_cols=discrete_set
+        )
+    elif "Parametric" in method:
+        synth = parametric_mvn_sample(
+            df_sub,
+            n_rows=int(n_rows),
+            seed=seed_used,
+            discrete_cols=discrete_set
+        )
+    else:  # CTGAN
+        with st.spinner("Training CTGAN model (this may take a minute)..."):
+            synth = ctgan_generate(
+                df_sub,
+                n_rows=int(n_rows),
+                epochs=100,
+                seed=seed_used
+            )
+
             # Clear excluded columns (keep them as blank)
             for col in exclude_cols:
                 if col in synth.columns:
