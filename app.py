@@ -28,7 +28,8 @@ from sklearn.metrics import roc_auc_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder
-from sdv.tabular import CTGAN
+from sdv.single_table import GaussianCopulaSynthesizer
+from sdv.metadata import SingleTableMetadata
 import streamlit as st
 
 # ------------------------------
@@ -132,16 +133,80 @@ def parametric_mvn_sample(df_sub: pd.DataFrame, n_rows: int, seed: int,
 
     return out
 
+# CTGAN generator (modern SDV API, for SDV >= 1.20)
+# ------------------------------
+# CTGAN generator (handles nulls safely)
+# ------------------------------
+# ------------------------------
+# CTGAN generator (robust, null-safe)
+# ------------------------------
 def ctgan_generate(df_sub: pd.DataFrame, n_rows: int, epochs: int = 100, seed: int = 42):
-    """Generate realistic synthetic data using CTGAN."""
-    try:
-        model = CTGAN(epochs=epochs, cuda=False)
-        model.fit(df_sub)
-        synth = model.sample(n_rows)
-        return synth
-    except Exception as e:
-        st.error(f"CTGAN generation failed: {e}")
-        return df_sub.sample(n=n_rows, replace=True, random_state=seed)
+    from sdv.single_table import CTGANSynthesizer
+    from sdv.metadata import SingleTableMetadata
+
+    # --- Step 1: Make a safe copy and convert mixed types ---
+    df_clean = df_sub.copy()
+
+    # Convert any object columns that are actually numeric (strings of numbers)
+    for col in df_clean.columns:
+        if df_clean[col].dtype == "object":
+            try:
+                df_clean[col] = pd.to_numeric(df_clean[col])
+            except Exception:
+                pass  # leave as object if conversion fails
+
+    # --- Step 2: Impute missing values robustly ---
+    for col in df_clean.columns:
+        if df_clean[col].dtype.kind in "biufc":  # numeric columns
+            if df_clean[col].isnull().all():
+                # If the column is fully NaN, fill with 0
+                df_clean[col] = 0
+            else:
+                df_clean[col] = df_clean[col].fillna(df_clean[col].median())
+        else:
+            if df_clean[col].isnull().all():
+                df_clean[col] = "Unknown"
+            else:
+                mode_val = df_clean[col].mode()
+                df_clean[col] = df_clean[col].fillna(mode_val.iloc[0] if not mode_val.empty else "Unknown")
+
+    # --- Step 3: Verify no nulls remain ---
+    if df_clean.isnull().any().any():
+        df_clean = df_clean.fillna(0)  # force fill last remaining ones
+
+    # --- Step 4: Build metadata ---
+    metadata = SingleTableMetadata()
+    metadata.detect_from_dataframe(df_clean)
+
+    # --- Step 5: Initialize CTGAN ---
+    synthesizer = CTGANSynthesizer(
+        metadata=metadata,
+        enforce_min_max_values=True,
+        epochs=epochs,
+        verbose=True
+    )
+
+      # --- Step 6: Train the model ---
+    synthesizer.fit(df_clean)
+
+    # --- Step 7: Generate synthetic samples (without randomize_seed) ---
+    np.random.seed(seed)
+    synthetic_data = synthesizer.sample(num_rows=n_rows)
+
+    return synthetic_data
+
+
+
+    # --- Step 4: Fit the model ---
+    synthesizer.fit(df_clean)
+
+    # --- Step 5: Generate synthetic samples ---
+    synthetic_data = synthesizer.sample(
+        num_rows=n_rows,
+        randomize_seed=seed
+    )
+
+    return synthetic_data
 
 
 
@@ -267,6 +332,7 @@ with st.sidebar:
     up = st.file_uploader("Upload Excel file", type=["xlsx", "xls"]) 
     seed = st.number_input("Random seed", value=42, step=1)
     randomize_seed = st.checkbox("Randomize seed each run", value=False)
+    seed_used = int(secrets.randbits(64)) if randomize_seed else int(seed)
     st.caption("Turn this on for unpredictability; turn off and set a seed for reproducibility.")
 
     st.header("2) Subset filters")
