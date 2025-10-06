@@ -5,3 +5,4 @@ scikit-learn
 scipy
 openpyxl
 matplotlib
+pip install sdv==1.10.0
