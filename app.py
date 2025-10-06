@@ -460,84 +460,83 @@ with simulate_tab:
         st.error("Your current filter produced an empty subset.")
         st.stop()
 
-if st.button("Run simulation", type="primary"):
-    with st.spinner("Generating synthetic rows..."):
-        seed_used = int(secrets.randbits(64)) if randomize_seed else int(seed)
+    # ✅ All simulation logic stays *inside* the tab
+    if st.button("Run simulation", type="primary"):
+        with st.spinner("Generating synthetic rows..."):
+            seed_used = int(secrets.randbits(64)) if randomize_seed else int(seed)
 
-        if "Bootstrap" in method:
-            synth = bootstrap_jitter_sample(
-                df_sub,
-                n_rows=int(n_rows),
-                noise_pct=float(noise_pct),
-                seed=seed_used,
-                discrete_cols=discrete_set
-            )
-        elif "Parametric" in method:
-            synth = parametric_mvn_sample(
-                df_sub,
-                n_rows=int(n_rows),
-                seed=seed_used,
-                discrete_cols=discrete_set
-            )
-        else:  # CTGAN
-            with st.spinner("Training CTGAN model (this may take a minute)..."):
-                synth = ctgan_generate(
+            if "Bootstrap" in method:
+                synth = bootstrap_jitter_sample(
                     df_sub,
                     n_rows=int(n_rows),
-                    epochs=100,
-                    seed=seed_used
+                    noise_pct=float(noise_pct),
+                    seed=seed_used,
+                    discrete_cols=discrete_set
                 )
+            elif "Parametric" in method:
+                synth = parametric_mvn_sample(
+                    df_sub,
+                    n_rows=int(n_rows),
+                    seed=seed_used,
+                    discrete_cols=discrete_set
+                )
+            else:  # CTGAN
+                with st.spinner("Training CTGAN model (this may take a minute)..."):
+                    synth = ctgan_generate(
+                        df_sub,
+                        n_rows=int(n_rows),
+                        epochs=100,
+                        seed=seed_used
+                    )
 
-        # Clear excluded columns (keep them as blank)
-        for col in exclude_cols:
-            if col in synth.columns:
-                synth[col] = None
+            # Clear excluded columns (keep them blank)
+            for col in exclude_cols:
+                if col in synth.columns:
+                    synth[col] = None
 
-        if include_original_flag:
-            df_tagged = df.copy()
-            df_tagged["__source__"] = "real"
-            synth_tagged = synth.copy()
-            synth_tagged["__source__"] = "synthetic"
-            combined = pd.concat([df_tagged, synth_tagged], ignore_index=True)
+            if include_original_flag:
+                df_tagged = df.copy()
+                df_tagged["__source__"] = "real"
+                synth_tagged = synth.copy()
+                synth_tagged["__source__"] = "synthetic"
+                combined = pd.concat([df_tagged, synth_tagged], ignore_index=True)
+            else:
+                combined = synth
+
+        st.success(f"Done! Generated {len(synth)} synthetic rows.")
+        st.info(f"Effective seed used: {seed_used}")
+
+        if run_diagnostics:
+            with st.expander("Diagnostics: compare subset vs. synthetic"):
+                ...
+                # (keep diagnostics section as is)
+
+        # ✅ Download Excel section — also stays inside this tab
+        out_path = "synthetic_data.xlsx"
+        meta = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "method": method,
+            "noise_pct": float(noise_pct) if "Bootstrap" in method else None,
+            "rows_generated": int(n_rows),
+            "randomize_seed": bool(randomize_seed),
+            "seed_used": int(seed_used),
+            "filters": json.dumps({k: list(map(str, v)) for k, v in filters.items()}),
+            "binary_columns": json.dumps(list(map(str, bin_cols))),
+            "ordinal_columns": json.dumps(list(map(str, ord_cols)))
+        }
+        if create_download_file:
+            with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
+                combined.to_excel(xw, index=False, sheet_name="data")
+                pd.DataFrame([meta]).to_excel(xw, index=False, sheet_name="meta")
+            with open(out_path, "rb") as f:
+                st.download_button(
+                    "Download Excel",
+                    data=f,
+                    file_name="synthetic_data.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
         else:
-            combined = synth
-
-    st.success(f"Done! Generated {len(synth)} synthetic rows.")
-    st.info(f"Effective seed used: {seed_used}")
-
-    if run_diagnostics:
-        with st.expander("Diagnostics: compare subset vs. synthetic"):
-            ...
-            # (keep diagnostics section as is)
-
-    # Download Excel section — stays inside the button block
-    out_path = "synthetic_data.xlsx"
-    meta = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "method": method,
-        "noise_pct": float(noise_pct) if "Bootstrap" in method else None,
-        "rows_generated": int(n_rows),
-        "randomize_seed": bool(randomize_seed),
-        "seed_used": int(seed_used),
-        "filters": json.dumps({k: list(map(str, v)) for k, v in filters.items()}),
-        "binary_columns": json.dumps(list(map(str, bin_cols))),
-        "ordinal_columns": json.dumps(list(map(str, ord_cols)))
-    }
-    if create_download_file:
-        with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
-            combined.to_excel(xw, index=False, sheet_name="data")
-            pd.DataFrame([meta]).to_excel(xw, index=False, sheet_name="meta")
-        with open(out_path, "rb") as f:
-            st.download_button(
-                "Download Excel",
-                data=f,
-                file_name="synthetic_data.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-    else:
-        st.caption("Download file generation skipped for speed. Toggle the checkbox above to enable it.")
-
-            
+            st.caption("Download file generation skipped for speed. Toggle the checkbox above to enable it.")
 
 # ---------------- Validation Tab ----------------
 with validate_tab:
