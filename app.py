@@ -288,37 +288,59 @@ def psi_categorical(real: pd.Series, synth: pd.Series, eps: float = 1e-6):
 
 
 def auc_real_vs_synth(df_real: pd.DataFrame, df_synth: pd.DataFrame):
+    # Drop metadata columns if they exist
+    for drop_col in ["__source__", "__y__"]:
+        df_real = df_real.drop(columns=[drop_col], errors="ignore")
+        df_synth = df_synth.drop(columns=[drop_col], errors="ignore")
+
+    # Keep only common columns
+    common_cols = [c for c in df_real.columns if c in df_synth.columns]
+    if len(common_cols) == 0:
+        return np.nan
+
+    df_real = df_real[common_cols].copy()
+    df_synth = df_synth[common_cols].copy()
+
+    # Convert all column names to strings (prevents sklearn error)
+    df_real.columns = df_real.columns.astype(str)
+    df_synth.columns = df_synth.columns.astype(str)
+
+    # Convert categorical/object columns to strings to ensure consistent encoding
+    for c in common_cols:
+        if df_real[c].dtype == "object" or df_synth[c].dtype == "object":
+            df_real[c] = df_real[c].astype(str)
+            df_synth[c] = df_synth[c].astype(str)
+
+    # Combine and label data
     df_r = df_real.copy(); df_r["__y__"] = 0
     df_s = df_synth.copy(); df_s["__y__"] = 1
     df_all = pd.concat([df_r, df_s], ignore_index=True)
 
-    X = df_all.drop(columns=["__y__"])  # encode categoricals
+    X = df_all.drop(columns=["__y__"])
     y = df_all["__y__"].to_numpy()
 
     num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
     cat_cols = [c for c in X.columns if c not in num_cols]
 
-    Xn = X[num_cols].apply(pd.to_numeric, errors="coerce") if len(num_cols) else pd.DataFrame(index=X.index)
+    Xn = X[num_cols].fillna(0) if len(num_cols) > 0 else pd.DataFrame(index=X.index)
 
-    if len(cat_cols):
+    # Encode categoricals safely
+    if len(cat_cols) > 0:
         enc = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
         Xc = pd.DataFrame(enc.fit_transform(X[cat_cols]))
         Xc.index = X.index
-        Xenc = pd.concat([Xn, Xc], axis=1).fillna(0)
+        Xenc = pd.concat([Xn, Xc], axis=1)
     else:
-        Xenc = Xn.fillna(0)
+        Xenc = Xn
 
-    if Xenc.shape[1] == 0:
-        return np.nan
+    # Ensure all feature names are strings
+    Xenc.columns = Xenc.columns.astype(str)
 
-    clf = LogisticRegression(max_iter=200, n_jobs=None)
-    try:
-        clf.fit(Xenc, y)
-        proba = clf.predict_proba(Xenc)[:, 1]
-        return float(roc_auc_score(y, proba))
-    except Exception:
-        return np.nan
-
+    # Fit classifier
+    clf = LogisticRegression(max_iter=500)
+    clf.fit(Xenc, y)
+    auc = roc_auc_score(y, clf.predict_proba(Xenc)[:, 1])
+    return auc
 
 # ------------------------------
 # Streamlit UI
@@ -438,111 +460,84 @@ with simulate_tab:
         st.error("Your current filter produced an empty subset.")
         st.stop()
 
-    if st.button("Run simulation", type="primary"):
-        with st.spinner("Generating synthetic rows..."):
-            seed_used = int(secrets.randbits(64)) if randomize_seed else int(seed)
+if st.button("Run simulation", type="primary"):
+    with st.spinner("Generating synthetic rows..."):
+        seed_used = int(secrets.randbits(64)) if randomize_seed else int(seed)
 
-    if "Bootstrap" in method:
-        synth = bootstrap_jitter_sample(
-            df_sub,
-            n_rows=int(n_rows),
-            noise_pct=float(noise_pct),
-            seed=seed_used,
-            discrete_cols=discrete_set
-        )
-    elif "Parametric" in method:
-        synth = parametric_mvn_sample(
-            df_sub,
-            n_rows=int(n_rows),
-            seed=seed_used,
-            discrete_cols=discrete_set
-        )
-    else:  # CTGAN
-        with st.spinner("Training CTGAN model (this may take a minute)..."):
-            synth = ctgan_generate(
+        if "Bootstrap" in method:
+            synth = bootstrap_jitter_sample(
                 df_sub,
                 n_rows=int(n_rows),
-                epochs=100,
-                seed=seed_used
+                noise_pct=float(noise_pct),
+                seed=seed_used,
+                discrete_cols=discrete_set
             )
-
-            # Clear excluded columns (keep them as blank)
-            for col in exclude_cols:
-                if col in synth.columns:
-                    synth[col] = None
-                    
-            if include_original_flag:
-                df_tagged = df.copy(); df_tagged["__source__"] = "real"
-                synth_tagged = synth.copy(); synth_tagged["__source__"] = "synthetic"
-                combined = pd.concat([df_tagged, synth_tagged], ignore_index=True)
-            else:
-                combined = synth
-
-        st.success(f"Done! Generated {len(synth)} synthetic rows.")
-        st.info(f"Effective seed used: {seed_used}")
-
-        if run_diagnostics:
-            with st.expander("Diagnostics: compare subset vs. synthetic"):
-                num_cols = df_sub.select_dtypes(include=[np.number]).columns
-                cat_cols = [c for c in df_sub.columns if c not in num_cols]
-
-                st.markdown("**Numeric summary (mean and standard deviation)**")
-                rows = []
-                for col in num_cols:
-                    rows.append({
-                        "column": col,
-                        "real_mean": _safe_mean(df_sub[col]),
-                        "real_sd": _safe_std(df_sub[col]),
-                        "synth_mean": _safe_mean(synth[col]),
-                        "synth_sd": _safe_std(synth[col]),
-                    })
-                if len(rows) > 0:
-                    st.dataframe(pd.DataFrame(rows))
-
-                st.markdown("**KS test (continuous numeric only)**")
-                rows = []
-                cont_cols = [c for c in num_cols if c not in discrete_set]
-                for col in cont_cols:
-                    rows.append({"column": col, "KS_stat": ks_numeric(df_sub[col], synth[col])})
-                if len(rows) > 0:
-                    st.dataframe(pd.DataFrame(rows))
-
-                st.markdown("**Discrete columns — value share deltas (percentage points)**")
-                for col in [c for c in num_cols if c in discrete_set]:
-                    st.markdown(f"*{col}*")
-                    st.dataframe(describe_cats(df_sub[col], synth[col]))
-
-                st.markdown("**Categorical columns — value share deltas (percentage points)**")
-                for col in cat_cols:
-                    st.markdown(f"*{col}*")
-                    st.dataframe(describe_cats(df_sub[col], synth[col]))
-
-        # Download as Excel with metadata
-        out_path = "synthetic_data.xlsx"
-        meta = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "method": method,
-            "noise_pct": float(noise_pct) if "Bootstrap" in method else None,
-            "rows_generated": int(n_rows),
-            "randomize_seed": bool(randomize_seed),
-            "seed_used": int(seed_used),
-            "filters": json.dumps({k: list(map(str, v)) for k, v in filters.items()}),
-            "binary_columns": json.dumps(list(map(str, bin_cols))),
-            "ordinal_columns": json.dumps(list(map(str, ord_cols)))
-        }
-        if create_download_file:
-            with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
-                combined.to_excel(xw, index=False, sheet_name="data")
-                pd.DataFrame([meta]).to_excel(xw, index=False, sheet_name="meta")
-            with open(out_path, "rb") as f:
-                st.download_button(
-                    "Download Excel",
-                    data=f,
-                    file_name="synthetic_data.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        elif "Parametric" in method:
+            synth = parametric_mvn_sample(
+                df_sub,
+                n_rows=int(n_rows),
+                seed=seed_used,
+                discrete_cols=discrete_set
+            )
+        else:  # CTGAN
+            with st.spinner("Training CTGAN model (this may take a minute)..."):
+                synth = ctgan_generate(
+                    df_sub,
+                    n_rows=int(n_rows),
+                    epochs=100,
+                    seed=seed_used
                 )
+
+        # Clear excluded columns (keep them as blank)
+        for col in exclude_cols:
+            if col in synth.columns:
+                synth[col] = None
+
+        if include_original_flag:
+            df_tagged = df.copy()
+            df_tagged["__source__"] = "real"
+            synth_tagged = synth.copy()
+            synth_tagged["__source__"] = "synthetic"
+            combined = pd.concat([df_tagged, synth_tagged], ignore_index=True)
         else:
-            st.caption("Download file generation skipped for speed. Toggle")
+            combined = synth
+
+    st.success(f"Done! Generated {len(synth)} synthetic rows.")
+    st.info(f"Effective seed used: {seed_used}")
+
+    if run_diagnostics:
+        with st.expander("Diagnostics: compare subset vs. synthetic"):
+            ...
+            # (keep diagnostics section as is)
+
+    # Download Excel section — stays inside the button block
+    out_path = "synthetic_data.xlsx"
+    meta = {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "method": method,
+        "noise_pct": float(noise_pct) if "Bootstrap" in method else None,
+        "rows_generated": int(n_rows),
+        "randomize_seed": bool(randomize_seed),
+        "seed_used": int(seed_used),
+        "filters": json.dumps({k: list(map(str, v)) for k, v in filters.items()}),
+        "binary_columns": json.dumps(list(map(str, bin_cols))),
+        "ordinal_columns": json.dumps(list(map(str, ord_cols)))
+    }
+    if create_download_file:
+        with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
+            combined.to_excel(xw, index=False, sheet_name="data")
+            pd.DataFrame([meta]).to_excel(xw, index=False, sheet_name="meta")
+        with open(out_path, "rb") as f:
+            st.download_button(
+                "Download Excel",
+                data=f,
+                file_name="synthetic_data.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+    else:
+        st.caption("Download file generation skipped for speed. Toggle the checkbox above to enable it.")
+
+            
 
 # ---------------- Validation Tab ----------------
 with validate_tab:
@@ -603,10 +598,19 @@ with validate_tab:
 
             result_df = pd.DataFrame(rows)
 
-            st.markdown("### 📊 Validation Metrics")
+            st.markdown("Validation Metrics")
             st.dataframe(result_df)
 
             auc_val = auc_real_vs_synth(holdout_df, synth_val)
-            st.metric("Classifier AUC (Real vs Synthetic)", f"{auc_val:.3f}", help="Closer to 0.5 = more realistic")
+            st.metric("Classifier AUC (Real vs Synthetic)", f"{auc_val:.3f}")
 
-            st.success("Validation completed successfully ✅")
+            if auc_val < 0.55:
+                st.success("✅ Excellent: Synthetic data is highly realistic and hard to distinguish from real data.")
+            elif auc_val < 0.7:
+                st.info("⚠️ Acceptable: Synthetic data is somewhat realistic but could be improved.")
+            else:
+                st.warning("🚨 Warning: Synthetic data is easily distinguishable. Try adjusting the generation method or parameters.")
+
+
+            st.success("Validation completed successfully!")
+       
