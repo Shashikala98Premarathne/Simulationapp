@@ -1,11 +1,12 @@
-streamlit>=1.32.0
-pandas>=2.2.0
-numpy>=1.26.0
-scikit-learn>=1.4.0
-scipy>=1.11.0
+streamlit==1.35.0
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.4.2
+scipy==1.12.0
 openpyxl
-matplotlib
-torch==2.1.0+cpu
--f https://download.pytorch.org/whl/torch_stable.html
+matplotlib==3.8.4
 sdv==1.10.0
 ctgan==0.8.0
+torch==2.1.0+cpu
+-f https://download.pytorch.org/whl/torch_stable.html
+
