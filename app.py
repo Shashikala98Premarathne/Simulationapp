@@ -346,7 +346,10 @@ def set_background_solid(main="#7DD9E651", sidebar="#EEEFF3"):
 set_background_solid()
 
 st.title("📊 Simulated Responses Builder")
-st.caption("ℹ️ Tip: For small datasets (n < 500), use **Bootstrap + Jitter** for realistic results. For larger samples (n > 500), try **Parametric** or **CTGAN** for more variety. Check Method in the sidebar.")
+st.caption("💡 Tip: For subsets (n < 500), use **Bootstrap + Jitter** for realistic results. "
+    "For medium subsets (n = 500–1000), use **Parametric (MVN)** to preserve correlations. "
+    "For larger subsets (n > 1000), try **CTGAN** for more variety and deep-pattern synthesis. "
+    "Check the *Method* selector in the sidebar.")
 
 
 with st.sidebar:
