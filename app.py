@@ -132,11 +132,6 @@ def parametric_mvn_sample(df_sub: pd.DataFrame, n_rows: int, seed: int,
                 out[col] = mvn_draws[:, i]
 
     return out
-
-# CTGAN generator (modern SDV API, for SDV >= 1.20)
-# ------------------------------
-# CTGAN generator (handles nulls safely)
-# ------------------------------
 # ------------------------------
 # CTGAN generator (robust, null-safe)
 # ------------------------------
@@ -421,7 +416,7 @@ with st.sidebar:
         n_rows = st.number_input("How many synthetic rows?", min_value=1, max_value=100000, value=100, step=10)
         noise_pct = 0.0
         if "Bootstrap" in method:
-            noise_pct = st.slider("Numeric jitter (% of each continuous column's standard deviation)", 0.0, 0.5, 0.05, 0.01)
+            noise_pct = st.slider("Numeric jitter (% of each continuous column's standard deviation)", 0.0, 0.5, 0.01, 0.01)
 
         st.header("4) Output")
         include_original_flag = st.checkbox("Add a column `__source__` indicating real vs synthetic", value=True)
