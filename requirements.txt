@@ -5,6 +5,7 @@ scikit-learn>=1.4.0
 scipy>=1.11.0
 openpyxl
 matplotlib
-torch>=2.1.0
-sdv==1.24.1
-ctgan==0.9.1
+torch==2.1.0+cpu
+-f https://download.pytorch.org/whl/torch_stable.html
+sdv==1.10.0
+ctgan==0.8.0
