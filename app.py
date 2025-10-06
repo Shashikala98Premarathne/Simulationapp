@@ -543,3 +543,70 @@ with simulate_tab:
                 )
         else:
             st.caption("Download file generation skipped for speed. Toggle")
+
+# ---------------- Validation Tab ----------------
+with validate_tab:
+    st.subheader("Validation: Evaluate Synthetic Data Quality")
+
+    if df is None or len(df) == 0:
+        st.warning("Please upload your data in the Simulation tab first.")
+        st.stop()
+
+    st.markdown("""
+    This section tests how well your chosen simulation method reproduces unseen patterns
+    using a **train / holdout split**. The holdout data acts as "ground truth" for comparison.
+    """)
+
+    val_fraction = st.slider("Holdout fraction", 0.1, 0.5, 0.2, 0.05)
+    boost_factor = st.number_input("Synthetic multiplier (rows per real row in train set)", 1, 10, 3)
+    run_val = st.button("Run Validation", type="primary")
+
+    if run_val:
+        with st.spinner("Running validation..."):
+            # Split data
+            train_df, holdout_df = train_test_split(df, test_size=val_fraction, random_state=int(seed))
+            seed_val = int(secrets.randbits(64)) if randomize_seed else int(seed)
+
+            # Generate synthetic data
+            if "Bootstrap" in method:
+                synth_val = bootstrap_jitter_sample(
+                    train_df, n_rows=len(train_df) * int(boost_factor),
+                    noise_pct=float(noise_pct), seed=seed_val, discrete_cols=discrete_set
+                )
+            elif "Parametric" in method:
+                synth_val = parametric_mvn_sample(
+                    train_df, n_rows=len(train_df) * int(boost_factor),
+                    seed=seed_val, discrete_cols=discrete_set
+                )
+            else:  # CTGAN
+                synth_val = ctgan_generate(
+                    train_df, n_rows=len(train_df) * int(boost_factor),
+                    seed=seed_val
+                )
+
+            synth_val = enforce_discrete_constraints(synth_val, bin_cols, ord_cols, allowed_vals)
+
+            # Compute per-column metrics
+            rows = []
+            for col in df.columns:
+                if pd.api.types.is_numeric_dtype(df[col]):
+                    if col in discrete_set:
+                        val = mae_numeric(train_df[col], synth_val[col])
+                        metric = "MAE (Discrete)"
+                    else:
+                        val = ks_numeric(train_df[col], synth_val[col])
+                        metric = "KS (Continuous)"
+                else:
+                    val = psi_categorical(train_df[col], synth_val[col])
+                    metric = "PSI (Categorical)"
+                rows.append({"Column": col, "Metric": metric, "Value": round(val, 4) if pd.notna(val) else None})
+
+            result_df = pd.DataFrame(rows)
+
+            st.markdown("### 📊 Validation Metrics")
+            st.dataframe(result_df)
+
+            auc_val = auc_real_vs_synth(holdout_df, synth_val)
+            st.metric("Classifier AUC (Real vs Synthetic)", f"{auc_val:.3f}", help="Closer to 0.5 = more realistic")
+
+            st.success("Validation completed successfully ✅")
